@@ -34,3 +34,28 @@ CREATE TRIGGER trigger_preference_summaries_updated_at
   BEFORE UPDATE ON public.preference_summaries
   FOR EACH ROW
   EXECUTE FUNCTION update_preference_summaries_updated_at();
+
+-- Enable RLS on preference_summaries
+ALTER TABLE public.preference_summaries ENABLE ROW LEVEL SECURITY;
+
+-- RLS Policies for preference_summaries
+CREATE POLICY "Users can view their own preference summaries"
+  ON public.preference_summaries
+  FOR SELECT
+  USING (auth.uid() = user_id);
+
+CREATE POLICY "Users can insert their own preference summaries"
+  ON public.preference_summaries
+  FOR INSERT
+  WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY "Users can update their own preference summaries"
+  ON public.preference_summaries
+  FOR UPDATE
+  USING (auth.uid() = user_id)
+  WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY "Users can delete their own preference summaries"
+  ON public.preference_summaries
+  FOR DELETE
+  USING (auth.uid() = user_id);

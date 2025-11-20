@@ -3,8 +3,12 @@ import { RestaurantData } from '@/types';
 const GOOGLE_PLACES_API_KEY = process.env.GOOGLE_PLACES_API_KEY!;
 const PLACES_API_BASE = 'https://places.googleapis.com/v1';
 
+// In-memory cache for pending requests to prevent duplicates
+const pendingRequests = new Map<string, Promise<RestaurantData[]>>();
+
 export interface PlacesSearchParams {
   city: string;
+  query?: string; // Free-form search query (e.g., restaurant name)
   cuisines?: string[];
   priceLevel?: number[];
   maxDistance?: number;
@@ -16,19 +20,35 @@ export interface PlacesSearchParams {
  * Search for restaurants using Google Places API (New)
  */
 export async function searchRestaurants(params: PlacesSearchParams): Promise<RestaurantData[]> {
-  const { city, cuisines, priceLevel, minRating, limit = 20 } = params;
-
-  // Build the text query
-  let query = `restaurants in ${city}`;
-  if (cuisines && cuisines.length > 0) {
-    query = `${cuisines.join(' or ')} ${query}`;
+  // Create cache key for request deduplication
+  const cacheKey = JSON.stringify(params);
+  
+  // Check if request is already pending
+  if (pendingRequests.has(cacheKey)) {
+    console.log('Request deduplication: reusing pending request');
+    return pendingRequests.get(cacheKey)!;
   }
 
-  const response = await fetch(`${PLACES_API_BASE}/places:searchText`, {
+  // Create the actual search function
+  const performSearch = async (): Promise<RestaurantData[]> => {
+    const { city, query: customQuery, cuisines, priceLevel, minRating, limit = 20 } = params;
+
+    // Build the text query
+    let query = customQuery || `restaurants in ${city}`;
+    if (!customQuery && cuisines && cuisines.length > 0) {
+      query = `${cuisines.join(' or ')} ${query}`;
+    } else if (customQuery && !customQuery.toLowerCase().includes(city.toLowerCase())) {
+      // If custom query doesn't include city, append it
+      query = `${customQuery} in ${city}`;
+    }
+
+    const response = await fetch(`${PLACES_API_BASE}/places:searchText`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'X-Goog-Api-Key': GOOGLE_PLACES_API_KEY,
+      // Optimized field mask: only request fields we actually use
+      // Fields: id, name, address, rating, price, types, location, photos, phone, website, hours, status
       'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.rating,places.userRatingCount,places.priceLevel,places.types,places.location,places.photos,places.internationalPhoneNumber,places.websiteUri,places.regularOpeningHours,places.businessStatus',
     },
     body: JSON.stringify({
@@ -39,9 +59,30 @@ export async function searchRestaurants(params: PlacesSearchParams): Promise<Res
   });
 
   if (!response.ok) {
-    const error = await response.text();
-    console.error('Google Places API error:', error);
-    throw new Error(`Google Places API error: ${response.status}`);
+    const errorText = await response.text();
+    let errorDetails;
+    try {
+      errorDetails = JSON.parse(errorText);
+    } catch {
+      errorDetails = errorText;
+    }
+    console.error('Google Places API error:', {
+      status: response.status,
+      statusText: response.statusText,
+      error: errorDetails,
+      request: { 
+        textQuery: query, 
+        maxResultCount: Math.min(limit, 20),
+        fieldMask: 'places.id,places.displayName,places.formattedAddress,places.rating,places.userRatingCount,places.priceLevel,places.types,places.location,places.photos,places.internationalPhoneNumber,places.websiteUri,places.regularOpeningHours,places.businessStatus'
+      },
+      apiKeyConfigured: !!GOOGLE_PLACES_API_KEY
+    });
+    
+    // Provide helpful error message based on status code
+    if (response.status === 400) {
+      throw new Error(`Invalid request to Google Places API: ${JSON.stringify(errorDetails)}. Check API key permissions, enabled APIs (Places API New), and request format.`);
+    }
+    throw new Error(`Google Places API error: ${response.status} - ${JSON.stringify(errorDetails)}`);
   }
 
   const data = await response.json();
@@ -56,8 +97,23 @@ export async function searchRestaurants(params: PlacesSearchParams): Promise<Res
     });
   }
 
-  // Convert to our RestaurantData format
-  return filteredPlaces.map((place: any) => convertPlaceToRestaurant(place));
+    // Convert to our RestaurantData format
+    return filteredPlaces.map((place: any) => convertPlaceToRestaurant(place));
+  };
+
+  // Create request promise and store it
+  const requestPromise = performSearch();
+  pendingRequests.set(cacheKey, requestPromise);
+
+  // Clean up after request completes (success or error)
+  requestPromise.finally(() => {
+    // Small delay before cleanup to allow rapid duplicate requests to benefit
+    setTimeout(() => {
+      pendingRequests.delete(cacheKey);
+    }, 1000);
+  });
+
+  return requestPromise;
 }
 
 /**
@@ -68,12 +124,31 @@ export async function getPlaceDetails(placeId: string): Promise<RestaurantData> 
     method: 'GET',
     headers: {
       'X-Goog-Api-Key': GOOGLE_PLACES_API_KEY,
+      // Optimized field mask: only request fields we actually use
       'X-Goog-FieldMask': 'id,displayName,formattedAddress,rating,userRatingCount,priceLevel,types,location,photos,internationalPhoneNumber,websiteUri,regularOpeningHours,businessStatus',
     },
   });
 
   if (!response.ok) {
-    throw new Error(`Google Places API error: ${response.status}`);
+    const errorText = await response.text();
+    let errorDetails;
+    try {
+      errorDetails = JSON.parse(errorText);
+    } catch {
+      errorDetails = errorText;
+    }
+    console.error('Google Places API error (getPlaceDetails):', {
+      status: response.status,
+      statusText: response.statusText,
+      error: errorDetails,
+      placeId,
+      apiKeyConfigured: !!GOOGLE_PLACES_API_KEY
+    });
+    
+    if (response.status === 400) {
+      throw new Error(`Invalid request to Google Places API: ${JSON.stringify(errorDetails)}. Check API key permissions, enabled APIs (Places API New), and request format.`);
+    }
+    throw new Error(`Google Places API error: ${response.status} - ${JSON.stringify(errorDetails)}`);
   }
 
   const place = await response.json();
@@ -108,6 +183,7 @@ function convertPlaceToRestaurant(place: any): RestaurantData {
   })) || [];
 
   return {
+    place_id: place.id || '', // Use actual Google place_id
     name: place.displayName?.text || 'Unknown Restaurant',
     formatted_address: place.formattedAddress || '',
     formatted_phone_number: place.internationalPhoneNumber,

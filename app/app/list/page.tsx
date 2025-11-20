@@ -10,21 +10,36 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Slider } from '@/components/ui/slider';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Drawer, DrawerContent, DrawerHeader, DrawerTitle, DrawerTrigger } from '@/components/ui/drawer';
+import { ChatDock } from '@/components/ChatDock';
+import { ChatPanel } from '@/components/ChatPanel';
 import { toast } from 'sonner';
 import { Loader2, Sparkles, SlidersHorizontal } from 'lucide-react';
 import { CUISINE_OPTIONS, PRICE_LEVELS, DISTANCE_OPTIONS } from '@/lib/constants';
 import { RestaurantCard } from '@/components/RestaurantCard';
 import type { RestaurantData } from '@/types';
 
+interface ChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: Date;
+}
+
 export default function ListPage() {
   const [city, setCity] = useState('');
   const [selectedCuisines, setSelectedCuisines] = useState<string[]>([]);
   const [selectedPrices, setSelectedPrices] = useState<number[]>([1, 2, 3, 4]);
-  const [maxDistance, setMaxDistance] = useState([DISTANCE_OPTIONS.default]);
+  const [maxDistance, setMaxDistance] = useState<number[]>([DISTANCE_OPTIONS.default]);
   const [minRating, setMinRating] = useState(0);
   const [hasSearched, setHasSearched] = useState(false);
   const [viewMode, setViewMode] = useState<'search' | 'recommendations'>('search');
   const [showFilters, setShowFilters] = useState(true);
+
+  // Chat state
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [isChatPanelOpen, setIsChatPanelOpen] = useState(false);
+  const [isChatLoading, setIsChatLoading] = useState(false);
+  const [currentChatIntent, setCurrentChatIntent] = useState<string>('');
 
   const searchQuery = useQuery({
     queryKey: ['restaurants', city, selectedCuisines, selectedPrices, maxDistance, minRating],
@@ -48,6 +63,8 @@ export default function ListPage() {
       return response.json();
     },
     enabled: false, // Only run when triggered
+    staleTime: 10 * 60 * 1000, // 10 minutes - keep results fresh across tab switches
+    gcTime: 30 * 60 * 1000, // 30 minutes - keep in cache longer
   });
 
   const interactionMutation = useMutation({
@@ -95,6 +112,8 @@ export default function ListPage() {
       return response.json();
     },
     enabled: false, // Only run when triggered
+    staleTime: 10 * 60 * 1000, // 10 minutes - keep results fresh across tab switches
+    gcTime: 30 * 60 * 1000, // 30 minutes - keep in cache longer
   });
 
   const handleSearch = () => {
@@ -132,6 +151,85 @@ export default function ListPage() {
   const handleInteraction = (restaurant: RestaurantData, action: string) => {
     const placeId = `${restaurant.name}-${restaurant.formatted_address}`.toLowerCase().replace(/\s+/g, '-');
     interactionMutation.mutate({ placeId, action });
+  };
+
+  // Chat handlers
+  const handleChatSubmit = async (message: string) => {
+    if (!city.trim()) {
+      toast.error('Please enter a city first');
+      return;
+    }
+
+    // Add user message to chat
+    const userMessage: ChatMessage = {
+      id: Date.now().toString(),
+      role: 'user',
+      content: message,
+      timestamp: new Date(),
+    };
+    setChatMessages(prev => [...prev, userMessage]);
+    setCurrentChatIntent(message);
+    setIsChatLoading(true);
+
+    try {
+      // Call recommendations API with chat intent
+      const response = await fetch('/api/places/recommendations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          city,
+          chat: message,
+          filters: {
+            cuisines: selectedCuisines.length > 0 ? selectedCuisines : undefined,
+            priceLevel: selectedPrices,
+            maxDistance: maxDistance[0],
+            minRating: minRating > 0 ? minRating : undefined,
+          },
+          limit: 10,
+        }),
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.message || 'Failed to get recommendations');
+      }
+
+      const data = await response.json();
+
+      // Add assistant response
+      const assistantMessage: ChatMessage = {
+        id: (Date.now() + 1).toString(),
+        role: 'assistant',
+        content: `I found ${data.recommendations.length} restaurants matching your request. Check them out below!`,
+        timestamp: new Date(),
+      };
+      setChatMessages(prev => [...prev, assistantMessage]);
+
+      // Update view mode and trigger recommendations
+      setViewMode('recommendations');
+      setHasSearched(true);
+      recommendationsQuery.refetch();
+
+      toast.success('Recommendations updated!');
+    } catch (error) {
+      console.error('Chat error:', error);
+      const errorMessage: ChatMessage = {
+        id: (Date.now() + 1).toString(),
+        role: 'assistant',
+        content: `Sorry, I couldn't process that request: ${(error as Error).message}`,
+        timestamp: new Date(),
+      };
+      setChatMessages(prev => [...prev, errorMessage]);
+      toast.error('Failed to get recommendations');
+    } finally {
+      setIsChatLoading(false);
+    }
+  };
+
+  const handleClearChat = () => {
+    setChatMessages([]);
+    setCurrentChatIntent('');
+    toast.success('Chat cleared');
   };
 
   // Get restaurants based on view mode
@@ -377,6 +475,24 @@ export default function ListPage() {
           )}
         </div>
       </div>
+
+      {/* Chat Components */}
+      <ChatPanel
+        open={isChatPanelOpen}
+        onOpenChange={setIsChatPanelOpen}
+        messages={chatMessages}
+        isLoading={isChatLoading}
+        onClearChat={handleClearChat}
+        currentIntent={currentChatIntent}
+      />
+
+      <ChatDock
+        onSubmit={handleChatSubmit}
+        onOpenPanel={() => setIsChatPanelOpen(true)}
+        isPanelOpen={isChatPanelOpen}
+        disabled={isChatLoading}
+        placeholder="Try: 'Date night in East Village, pasta + wine, under $50pp'"
+      />
     </div>
   );
 }

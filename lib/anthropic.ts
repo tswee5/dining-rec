@@ -11,6 +11,10 @@ export interface RecommendationRequest {
     maxDistance: number;
     vibeTags: string[];
     defaultCity?: string;
+    ageRange?: string;
+    neighborhood?: string;
+    diningFrequency?: string;
+    typicalSpend?: string;
   };
   interactionHistory: {
     likes: Array<{
@@ -28,6 +32,14 @@ export interface RecommendationRequest {
       types: string[];
     }>;
   };
+  preferenceSummary?: string;
+  chatIntent?: string;
+  filters?: {
+    cuisines?: string[];
+    priceLevel?: number[];
+    maxDistance?: number;
+    minRating?: number;
+  };
   city: string;
   limit?: number;
 }
@@ -43,10 +55,10 @@ export interface RecommendationResponse {
 export async function getClaudeRecommendations(
   request: RecommendationRequest
 ): Promise<RecommendationResponse> {
-  const { userPreferences, interactionHistory, city, limit = 10 } = request;
+  const { userPreferences, interactionHistory, city, limit = 10, preferenceSummary, chatIntent, filters } = request;
 
   // Build the prompt
-  const prompt = buildRecommendationPrompt(userPreferences, interactionHistory, city, limit);
+  const prompt = buildRecommendationPrompt(userPreferences, interactionHistory, city, limit, preferenceSummary, chatIntent, filters);
 
   try {
     const message = await anthropic.messages.create({
@@ -76,7 +88,10 @@ function buildRecommendationPrompt(
   preferences: RecommendationRequest['userPreferences'],
   history: RecommendationRequest['interactionHistory'],
   city: string,
-  limit: number
+  limit: number,
+  preferenceSummary?: string,
+  chatIntent?: string,
+  filters?: RecommendationRequest['filters']
 ): string {
   const likedRestaurants = history.likes
     .map(
@@ -95,13 +110,40 @@ function buildRecommendationPrompt(
     .map((r) => `- ${r.name} (${r.types.slice(0, 3).join(', ')})`)
     .join('\n');
 
-  return `You are a restaurant recommendation assistant. Based on the user's preferences and interaction history, recommend ${limit} restaurants in ${city}.
+  // Build global profile section
+  const globalProfile = [];
+  if (preferences.ageRange) globalProfile.push(`Age Range: ${preferences.ageRange}`);
+  if (preferences.neighborhood) globalProfile.push(`Preferred Neighborhood: ${preferences.neighborhood}`);
+  if (preferences.diningFrequency) globalProfile.push(`Dining Frequency: ${preferences.diningFrequency}`);
+  if (preferences.typicalSpend) globalProfile.push(`Typical Spend: ${preferences.typicalSpend}`);
 
-USER PREFERENCES:
+  // Build active filters section
+  const activeFilters = [];
+  if (filters?.cuisines && filters.cuisines.length > 0) {
+    activeFilters.push(`Cuisines: ${filters.cuisines.join(', ')}`);
+  }
+  if (filters?.priceLevel && filters.priceLevel.length > 0) {
+    activeFilters.push(`Price Levels: ${filters.priceLevel.map(p => '$'.repeat(p)).join(', ')}`);
+  }
+  if (filters?.maxDistance) {
+    activeFilters.push(`Max Distance: ${filters.maxDistance} miles`);
+  }
+  if (filters?.minRating) {
+    activeFilters.push(`Min Rating: ${filters.minRating} stars`);
+  }
+
+  return `You are a dining concierge assistant. Based on the user's profile, preferences, interaction history, and specific request, recommend ${limit} restaurants in ${city}.
+
+${globalProfile.length > 0 ? `GLOBAL PROFILE:\n${globalProfile.map(p => `- ${p}`).join('\n')}\n` : ''}
+${chatIntent ? `USER REQUEST:\n"${chatIntent}"\n` : ''}
+${preferenceSummary ? `PREFERENCE SUMMARY (from past behavior):\n${preferenceSummary}\n` : ''}
+SAVED PREFERENCES:
 - Preferred Cuisines: ${preferences.preferredCuisines.join(', ') || 'No specific preferences'}
 - Price Range: ${preferences.priceRange.map((p) => '$'.repeat(p)).join(', ') || 'Any'}
 - Max Distance: ${preferences.maxDistance} miles
 - Vibe Tags: ${preferences.vibeTags.join(', ') || 'No specific vibe preferences'}
+
+${activeFilters.length > 0 ? `ACTIVE FILTERS (current search):\n${activeFilters.map(f => `- ${f}`).join('\n')}\n` : ''}
 
 INTERACTION HISTORY:
 
@@ -115,24 +157,26 @@ Restaurants the user is UNSURE about (Maybe):
 ${maybeRestaurants || 'None yet'}
 
 TASK:
-Based on the above information, recommend ${limit} specific restaurants in ${city} that the user would likely enjoy. Focus on:
-1. Matching their stated preferences
-2. Learning from their liked restaurants (cuisine types, price levels, vibes)
-3. Avoiding types of places they passed on
-4. Suggesting variety while staying within their preferences
+Based on the above information, recommend up to ${limit} specific restaurants in ${city} that the user would likely enjoy.${chatIntent ? ' PRIORITIZE matching the user request above.' : ''} Focus on:
+1. ${chatIntent ? 'Fulfilling the specific user request/intent' : 'Matching their stated preferences'}
+2. ${chatIntent ? 'Considering global profile and filters' : 'Learning from their liked restaurants (cuisine types, price levels, vibes)'}
+3. Learning from preference summary and interaction history
+4. Avoiding types of places they passed on
+5. Suggesting variety while staying within constraints
 
 IMPORTANT FORMAT REQUIREMENTS:
-- Recommend REAL restaurants that exist in ${city}
+- Recommend REAL restaurants that exist in ${city}${preferences.neighborhood ? ` (preferably in or near ${preferences.neighborhood})` : ''}
 - Provide the exact restaurant name as it would appear on Google Maps
-- Include a brief reason for each recommendation (1-2 sentences)
+- Include a brief reason for each recommendation (1-2 sentences max)
 - Assign a confidence level: high, medium, or low
+- Return ≤${limit} recommendations (you may return fewer if appropriate matches are limited)
 
 Return your response in this exact JSON format:
 {
   "recommendations": [
     {
       "restaurantName": "Exact Restaurant Name",
-      "reason": "Brief explanation of why this matches the user's preferences",
+      "reason": "Brief explanation of why this matches",
       "confidence": "high"
     }
   ]

@@ -43,6 +43,7 @@ export interface Restaurant {
 }
 
 export interface RestaurantData {
+  place_id: string; // Google Places API place ID
   name: string;
   formatted_address: string;
   formatted_phone_number?: string;

@@ -4,7 +4,7 @@ import { useState, useRef, KeyboardEvent } from 'react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { MessageSquare, Send, X } from 'lucide-react';
-import { cn } from './ui/utils';
+import { cn } from '@/lib/utils';
 
 interface ChatDockProps {
   onSubmit: (message: string) => void;

@@ -30,7 +30,7 @@ export default function MapPage() {
   const [city, setCity] = useState('');
   const [selectedCuisines, setSelectedCuisines] = useState<string[]>([]);
   const [selectedPrices, setSelectedPrices] = useState<number[]>([1, 2, 3, 4]);
-  const [maxDistance, setMaxDistance] = useState([DISTANCE_OPTIONS.default]);
+  const [maxDistance, setMaxDistance] = useState<number[]>([DISTANCE_OPTIONS.default]);
   const [minRating, setMinRating] = useState(0);
   const [hasSearched, setHasSearched] = useState(false);
   const [viewMode, setViewMode] = useState<'search' | 'recommendations'>('search');

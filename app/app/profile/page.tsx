@@ -54,7 +54,7 @@ export default function ProfilePage() {
   const [defaultCity, setDefaultCity] = useState('');
   const [selectedCuisines, setSelectedCuisines] = useState<string[]>([]);
   const [priceRange, setPriceRange] = useState<number[]>([1, 2, 3, 4]);
-  const [maxDistance, setMaxDistance] = useState([DISTANCE_OPTIONS.default]);
+  const [maxDistance, setMaxDistance] = useState<number[]>([DISTANCE_OPTIONS.default]);
   const [vibeTags, setVibeTags] = useState<string[]>([]);
 
   // Get user
